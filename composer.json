@@ -20,8 +20,8 @@
     "support": {
         "email": "contato@fiscalapi.com.br",
         "docs": "https://docs.fiscalapi.com.br",
-        "issues": "https://github.com/fiscaIapi/fiscalapi-php/issues",
-        "source": "https://github.com/fiscaIapi/fiscalapi-php"
+        "issues": "https://github.com/fiscalapi-br/fiscalapi-php/issues",
+        "source": "https://github.com/fiscalapi-br/fiscalapi-php"
     },
     "authors": [
         {

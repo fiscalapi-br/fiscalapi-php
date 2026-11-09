@@ -1,6 +1,6 @@
 # FiscalAPI — SDK PHP
 
-Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e por chave, SIGEF, CNIR e perfil do produtor rural.
+Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e por chave, NFS-e por chave, Simples Nacional, SIGEF, CNIR e perfil do produtor rural.
 
 - PHP 8.1 ou superior, só com a extensão `curl` (nenhum pacote do Composer).
 - Autoload PSR-4 (`FiscalApiBr\`).
@@ -50,6 +50,8 @@ Todos os métodos devolvem `array` com o JSON da API. Use argumentos nomeados pa
 | `consultarCndt(cpf: \| cnpj:)` | `GET /api/consultar-cndt` | Certidão de débitos trabalhistas |
 | `consultarCrfFgts(cpf: \| cnpj:)` | `GET /api/consultar-crf-fgts` | Regularidade do FGTS |
 | `consultarCertidoesTodas(cpf: \| cnpj:, skipEstaduais: false)` | `GET /api/certidoes-todas` | Todas as certidões em uma chamada |
+| `consultarSimplesNacional($cnpj)` | `GET /api/consultar-simples-nacional` | Situação no Simples Nacional e SIMEI |
+| `consultarNfse($chave, danfse: false)` | `GET /api/consultar-nfse` | NFS-e (padrão nacional) por chave, sem certificado |
 | `consultarNfeXml($chave, $certificado, $senha, manifestar: true)` | `POST /api/consultar-nfe-xml` | XML completo da NF-e |
 | `consultarSigef(cpf: \| cnpj:)` | `GET /api/consultar-sigef` | Parcelas certificadas no SIGEF/INCRA |
 | `consultarSigefParcela($uuid, forceFresh: false)` | `GET /api/consultar-sigef-parcela` | Uma parcela com polígono, vértices e confrontantes |
@@ -83,6 +85,25 @@ echo $empresa['result']['razao_social'], ' — ', $empresa['result']['situacao_c
 // Dado atual, sem cache (consome mais créditos):
 $api->consultarCnpj('12345678000195', forceFresh: true);
 ```
+
+### Simples Nacional
+
+```php
+$r = $api->consultarSimplesNacional('11222333000181');
+var_dump($r['optante_simples'], $r['situacao_simei'], $r['regime_regular_ibs']);
+```
+
+### NFS-e por chave
+
+```php
+$nfse = $api->consultarNfse(
+    '35503082211222333000181000000000012326100000045676',
+    danfse: true, // opcional: PDF do DANFSe em base64
+);
+echo $nfse['emitente']['razao_social'], ' — ', $nfse['tributacao_municipal']['valor_servico'], PHP_EOL;
+```
+
+Uma consulta nova leva de 30 a 60 segundos. Só a NFS-e entregue é cobrada.
 
 ### Certidões com PDF
 

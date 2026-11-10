@@ -21,7 +21,7 @@ use FiscalApiBr\Exception\ServerException;
  */
 final class FiscalAPI
 {
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.2.0';
     public const DEFAULT_BASE_URL = 'https://api.fiscalapi.com.br';
     /** Algumas consultas (NF-e, SIGEF) podem levar até 180 s no servidor. */
     public const DEFAULT_TIMEOUT = 200;
@@ -112,6 +112,15 @@ final class FiscalAPI
         ]);
     }
 
+    /** Situação no Simples Nacional e SIMEI (GET /api/consultar-simples-nacional). */
+    public function consultarSimplesNacional(string $cnpj): array
+    {
+        if (trim($cnpj) === '') {
+            throw new \InvalidArgumentException('Informe o CNPJ.');
+        }
+        return $this->get('/api/consultar-simples-nacional', ['cnpj' => trim($cnpj)]);
+    }
+
     // ----------------------------------------------------------- Certidões
 
     /** CND estadual (ICMS) em uma UF (GET /api/consultar-cnd). */
@@ -183,6 +192,23 @@ final class FiscalAPI
             'certificado' => self::certificadoBase64($certificado),
             'senha' => $senha,
             'manifestar' => $manifestar,
+        ]);
+    }
+
+    /**
+     * NFS-e (padrão nacional) pela chave de acesso, sem certificado
+     * (GET /api/consultar-nfse). Com $danfse = true, inclui o PDF do DANFSe em
+     * base64. Uma consulta nova pode levar de 30 a 60 segundos.
+     */
+    public function consultarNfse(string $chave, bool $danfse = false): array
+    {
+        $digitos = preg_replace('/\D/', '', $chave) ?? '';
+        if ($digitos === '') {
+            throw new \InvalidArgumentException('Informe a chave de acesso.');
+        }
+        return $this->get('/api/consultar-nfse', [
+            'chave' => $digitos,
+            'danfse' => $danfse ?: null,
         ]);
     }
 

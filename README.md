@@ -1,6 +1,6 @@
 # FiscalAPI — SDK PHP
 
-Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e por chave, NFS-e por chave, Simples Nacional, SIGEF, CNIR e perfil do produtor rural.
+Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e e de CT-e por chave, NFS-e por chave, Simples Nacional, SIGEF, CNIR e perfil do produtor rural.
 
 - PHP 8.1 ou superior, só com a extensão `curl` (nenhum pacote do Composer).
 - Autoload PSR-4 (`FiscalApiBr\`).
@@ -53,6 +53,7 @@ Todos os métodos devolvem `array` com o JSON da API. Use argumentos nomeados pa
 | `consultarSimplesNacional($cnpj)` | `GET /api/consultar-simples-nacional` | Situação no Simples Nacional e SIMEI |
 | `consultarNfse($chave, danfse: false)` | `GET /api/consultar-nfse` | NFS-e (padrão nacional) por chave, sem certificado |
 | `consultarNfeXml($chave, $certificado, $senha, manifestar: true)` | `POST /api/consultar-nfe-xml` | XML completo da NF-e |
+| `consultarCteXml($chave, $certificado, $senha)` | `POST /api/consultar-cte-xml` | XML completo do CT-e |
 | `consultarSigef(cpf: \| cnpj:)` | `GET /api/consultar-sigef` | Parcelas certificadas no SIGEF/INCRA |
 | `consultarSigefParcela($uuid, forceFresh: false)` | `GET /api/consultar-sigef-parcela` | Uma parcela com polígono, vértices e confrontantes |
 | `consultarCnir(cpf: \| cnpj:)` | `GET /api/consultar-cnir` | Imóveis rurais no CNIR/CAFIR |
@@ -138,6 +139,23 @@ if ($nota['status'] === 'ok') {
 ```
 
 O certificado A1 precisa ser de um participante da nota (emitente, destinatário, transportador ou autorizado) e **não é armazenado** pela API. Só há cobrança quando o XML é devolvido.
+
+### XML de CT-e por chave
+
+```php
+$cte = $api->consultarCteXml(
+    '51261011222333000181570010000001231123456784',
+    'certificado.pfx',           // caminho do arquivo ou conteúdo em base64
+    'senha-do-certificado',
+);
+if ($cte['status'] === 'ok') {
+    file_put_contents($cte['chave'] . '.xml', $cte['xml']);
+} else {
+    echo $cte['status'], ': ', $cte['mensagem'], PHP_EOL;
+}
+```
+
+Aceita CT-e (modelo 57), CT-e OS (67) e GTV-e (64). O certificado A1 precisa ser de um participante do documento (emitente, tomador, remetente, destinatário, expedidor ou recebedor) e **não é armazenado** pela API. Só há cobrança quando o XML é devolvido.
 
 ### Imóvel rural
 

@@ -196,6 +196,26 @@ final class FiscalAPI
     }
 
     /**
+     * XML completo de um CT-e, CT-e OS ou GTV-e pela chave de acesso (POST /api/consultar-cte-xml).
+     *
+     * @param string $chave       Chave de acesso com 44 dígitos.
+     * @param string $certificado Caminho do arquivo .pfx/.p12 ou o conteúdo em base64.
+     *                            O certificado não é armazenado pela API.
+     * @param string $senha       Senha do certificado.
+     */
+    public function consultarCteXml(string $chave, string $certificado, string $senha): array
+    {
+        if (trim($chave) === '') {
+            throw new \InvalidArgumentException('Informe a chave de acesso.');
+        }
+        return $this->request('POST', '/api/consultar-cte-xml', [], [
+            'chave' => preg_replace('/\D/', '', $chave),
+            'certificado' => self::certificadoBase64($certificado),
+            'senha' => $senha,
+        ]);
+    }
+
+    /**
      * NFS-e (padrão nacional) pela chave de acesso, sem certificado
      * (GET /api/consultar-nfse). Com $danfse = true, inclui o PDF do DANFSe em
      * base64. Uma consulta nova pode levar de 30 a 60 segundos.

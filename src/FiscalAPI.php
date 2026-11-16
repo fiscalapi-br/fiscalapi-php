@@ -21,7 +21,7 @@ use FiscalApiBr\Exception\ServerException;
  */
 final class FiscalAPI
 {
-    public const VERSION = '0.2.0';
+    public const VERSION = '0.3.0';
     public const DEFAULT_BASE_URL = 'https://api.fiscalapi.com.br';
     /** Algumas consultas (NF-e, SIGEF) podem levar até 180 s no servidor. */
     public const DEFAULT_TIMEOUT = 200;
@@ -192,6 +192,27 @@ final class FiscalAPI
             'certificado' => self::certificadoBase64($certificado),
             'senha' => $senha,
             'manifestar' => $manifestar,
+        ]);
+    }
+
+    /**
+     * XML completo de um CT-e, CT-e OS ou GTV-e pela chave de acesso (POST /api/consultar-cte-xml).
+     *
+     * @param string $chave       Chave de acesso com 44 dígitos.
+     * @param string $certificado Caminho do arquivo .pfx/.p12 ou o conteúdo em base64.
+     *                            O certificado não é armazenado pela API.
+     * @param string $senha       Senha do certificado.
+     */
+    public function consultarCteXml(string $chave, string $certificado, string $senha): array
+    {
+        if (trim($chave) === '') {
+            throw new \InvalidArgumentException('Informe a chave de acesso.');
+        }
+        return $this->request('POST', '/api/consultar-cte-xml', [], [
+            // Aceita CNPJ alfanumérico: só tira separadores e põe em maiúsculas.
+            'chave' => strtoupper(preg_replace('/[^0-9A-Za-z]/', '', $chave) ?? ''),
+            'certificado' => self::certificadoBase64($certificado),
+            'senha' => $senha,
         ]);
     }
 

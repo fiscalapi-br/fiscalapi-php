@@ -209,7 +209,8 @@ final class FiscalAPI
             throw new \InvalidArgumentException('Informe a chave de acesso.');
         }
         return $this->request('POST', '/api/consultar-cte-xml', [], [
-            'chave' => preg_replace('/\D/', '', $chave),
+            // Aceita CNPJ alfanumérico: só tira separadores e põe em maiúsculas.
+            'chave' => strtoupper(preg_replace('/[^0-9A-Za-z]/', '', $chave) ?? ''),
             'certificado' => self::certificadoBase64($certificado),
             'senha' => $senha,
         ]);

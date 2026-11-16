@@ -21,7 +21,7 @@ use FiscalApiBr\Exception\ServerException;
  */
 final class FiscalAPI
 {
-    public const VERSION = '0.2.0';
+    public const VERSION = '0.3.0';
     public const DEFAULT_BASE_URL = 'https://api.fiscalapi.com.br';
     /** Algumas consultas (NF-e, SIGEF) podem levar até 180 s no servidor. */
     public const DEFAULT_TIMEOUT = 200;

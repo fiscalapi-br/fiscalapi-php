@@ -1,6 +1,6 @@
 {
     "name": "fiscalapi-br/fiscalapi-php",
-    "description": "SDK da FiscalAPI (Brasil): Inscrição Estadual, CNPJ, certidões, NF-e, SIGEF, CNIR e perfil do produtor rural.",
+    "description": "SDK da FiscalAPI (Brasil): Inscrição Estadual, CNPJ, certidões, NF-e, CT-e, DIFAL, SIGEF, CNIR e perfil do produtor rural.",
     "type": "library",
     "license": "MIT",
     "keywords": [
@@ -11,6 +11,7 @@
         "cnd",
         "certidao",
         "nfe",
+        "difal",
         "sigef",
         "cnir",
         "produtor rural",

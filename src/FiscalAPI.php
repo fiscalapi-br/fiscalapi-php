@@ -21,7 +21,7 @@ use FiscalApiBr\Exception\ServerException;
  */
 final class FiscalAPI
 {
-    public const VERSION = '0.3.0';
+    public const VERSION = '0.4.0';
     public const DEFAULT_BASE_URL = 'https://api.fiscalapi.com.br';
     /** Algumas consultas (NF-e, SIGEF) podem levar até 180 s no servidor. */
     public const DEFAULT_TIMEOUT = 200;
@@ -214,6 +214,42 @@ final class FiscalAPI
             'certificado' => self::certificadoBase64($certificado),
             'senha' => $senha,
         ]);
+    }
+
+    /**
+     * DIFAL de saída (EC 87/2015) por UF de destino, num mês
+     * (POST /api/consultar-difal-saida). Beta.
+     *
+     * Lista as NF-e do emitente com DIFAL e FCP destacados, a situação da guia
+     * de cada nota e o valor em aberto. Cobra 1 consulta por UF com
+     * status "ok". Pode levar cerca de 70 s. Não é repetido em 5xx.
+     *
+     * @param string   $competencia Mês de emissão das notas, AAAA-MM (ex.: 2026-10).
+     * @param string   $certificado Caminho do arquivo .pfx/.p12 do EMITENTE das notas
+     *                              ou o conteúdo em base64. Não é armazenado pela API.
+     * @param string   $senha       Senha do certificado.
+     * @param string[] $ufs         Siglas das UFs de destino. Vazio = as 10 atendidas
+     *                              (AC, AP, DF, GO, MS, MT, RR, RS, SC, SE).
+     */
+    public function consultarDifalSaida(
+        string $competencia,
+        string $certificado,
+        string $senha,
+        array $ufs = []
+    ): array {
+        $competencia = trim($competencia);
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $competencia)) {
+            throw new \InvalidArgumentException('Informe a competência no formato AAAA-MM (ex.: 2026-10).');
+        }
+        $body = [
+            'certificado' => self::certificadoBase64($certificado),
+            'senha' => $senha,
+            'competencia' => $competencia,
+        ];
+        if ($ufs !== []) {
+            $body['ufs'] = array_values(array_map(static fn ($uf): string => self::uf((string) $uf), $ufs));
+        }
+        return $this->request('POST', '/api/consultar-difal-saida', [], $body);
     }
 
     /**

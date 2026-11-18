@@ -46,7 +46,7 @@ Todos os métodos devolvem `array` com o JSON da API. Use argumentos nomeados pa
 | `consultarCnpj($cnpj, forceFresh: false)` | `GET /api/consultar-cnpj` | Dados cadastrais da Receita Federal |
 | `consultarCnd($uf, cpf: \| cnpj:)` | `GET /api/consultar-cnd` | CND estadual (ICMS) com PDF |
 | `consultarCndTodos(cpf: \| cnpj:)` | `GET /api/consultar-cnd-todos` | CND estadual em todos os estados disponíveis |
-| `consultarCndFederal(cpf: \| cnpj:, emitirNova: false)` | `GET /api/consultar-cnd-federal` | CND Federal (Receita Federal + PGFN) |
+| `consultarCndFederal(cnpj: \| cpf: + dataNascimento:, emitirNova: false)` | `GET /api/consultar-cnd-federal` | CND Federal (Receita Federal + PGFN) |
 | `consultarCndt(cpf: \| cnpj:)` | `GET /api/consultar-cndt` | Certidão de débitos trabalhistas |
 | `consultarCrfFgts(cpf: \| cnpj:)` | `GET /api/consultar-crf-fgts` | Regularidade do FGTS |
 | `consultarCertidoesTodas(cpf: \| cnpj:, skipEstaduais: false)` | `GET /api/certidoes-todas` | Todas as certidões em uma chamada |
@@ -117,6 +117,8 @@ if (!empty($cnd['result']['pdf_base64'])) {
 }
 
 $federal = $api->consultarCndFederal(cnpj: '12345678000195');
+// CPF: a Receita exige a data de nascimento (DD/MM/AAAA ou AAAA-MM-DD)
+$federalPf = $api->consultarCndFederal(cpf: '12345678909', dataNascimento: '12/04/1985');
 $trabalhista = $api->consultarCndt(cnpj: '12345678000195');
 $fgts = $api->consultarCrfFgts(cnpj: '12345678000195');
 ```

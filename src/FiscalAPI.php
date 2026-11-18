@@ -21,7 +21,7 @@ use FiscalApiBr\Exception\ServerException;
  */
 final class FiscalAPI
 {
-    public const VERSION = '0.4.0';
+    public const VERSION = '0.5.0';
     public const DEFAULT_BASE_URL = 'https://api.fiscalapi.com.br';
     /** Algumas consultas (NF-e, SIGEF) podem levar até 180 s no servidor. */
     public const DEFAULT_TIMEOUT = 200;
@@ -138,11 +138,24 @@ final class FiscalAPI
         return $this->get('/api/consultar-cnd-todos', self::umDocumento(['cpf' => $cpf, 'cnpj' => $cnpj]));
     }
 
-    /** CND Federal — Receita Federal + PGFN (GET /api/consultar-cnd-federal). */
-    public function consultarCndFederal(?string $cpf = null, ?string $cnpj = null, bool $emitirNova = false): array
-    {
+    /**
+     * CND Federal — Receita Federal + PGFN (GET /api/consultar-cnd-federal).
+     * Para CPF, a Receita exige $dataNascimento do titular (DD/MM/AAAA ou AAAA-MM-DD).
+     */
+    public function consultarCndFederal(
+        ?string $cpf = null,
+        ?string $cnpj = null,
+        bool $emitirNova = false,
+        ?string $dataNascimento = null,
+    ): array {
+        $doc = self::umDocumento(['cpf' => $cpf, 'cnpj' => $cnpj]);
+        $nascimento = trim($dataNascimento ?? '');
+        if (isset($doc['cpf']) && $nascimento === '') {
+            throw new \InvalidArgumentException('Informe dataNascimento: a CND Federal de CPF exige a data de nascimento.');
+        }
         return $this->get('/api/consultar-cnd-federal', [
-            ...self::umDocumento(['cpf' => $cpf, 'cnpj' => $cnpj]),
+            ...$doc,
+            'data_nascimento' => isset($doc['cpf']) ? $nascimento : null,
             'emitir_nova' => $emitirNova ?: null,
         ]);
     }

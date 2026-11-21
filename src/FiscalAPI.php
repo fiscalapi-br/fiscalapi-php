@@ -27,6 +27,10 @@ final class FiscalAPI
     public const DEFAULT_TIMEOUT = 200;
     public const DEFAULT_MAX_RETRIES = 3;
 
+    /** Até 1.000 chaves por chamada no Monitor de NF-e. */
+    public const MONITOR_NFE_MAX_LOTE = 1000;
+
+    private const MONITOR = '/api/monitor-nfe';
     private const RETRYABLE_ANY_METHOD = [429];
     private const RETRYABLE_IDEMPOTENT = [500, 502, 503, 504];
     private const MAX_BACKOFF = 30.0;
@@ -282,6 +286,167 @@ final class FiscalAPI
         ]);
     }
 
+
+    // ----------------------------------------------------- Monitor de NF-e
+
+    /**
+     * Coloca até 1.000 chaves de NF-e no monitor (POST /api/monitor-nfe/chaves).
+     *
+     * Cada chave aceita é cobrada uma vez e acompanhada por até $prazoDias (1 a 180,
+     * padrão 180). Chave já monitorada não é cobrada de novo; chave inválida volta com
+     * "motivo", sem cobrança. Sem saldo para todas as aceitas, lança
+     * InsufficientBalanceException (402) e nenhuma entra. Não é repetido em 5xx.
+     *
+     * @param array<int, string|array{chave: string, status_conhecido?: string}> $chaves
+     *        Chaves (string) ou ['chave' => ..., 'status_conhecido' => 'autorizada'].
+     */
+    public function cadastrarChavesMonitorNfe(array $chaves, ?int $prazoDias = null): array
+    {
+        $itens = [];
+        foreach (self::lote($chaves) as $item) {
+            if (\is_array($item)) {
+                $novo = ['chave' => self::chaveNfe((string) ($item['chave'] ?? ''))];
+                if (!empty($item['status_conhecido'])) {
+                    $novo['status_conhecido'] = (string) $item['status_conhecido'];
+                }
+                $itens[] = $novo;
+            } else {
+                $itens[] = ['chave' => self::chaveNfe((string) $item)];
+            }
+        }
+        $body = ['chaves' => $itens];
+        if ($prazoDias !== null) {
+            if ($prazoDias < 1 || $prazoDias > 180) {
+                throw new \InvalidArgumentException('prazoDias deve ser um inteiro de 1 a 180.');
+            }
+            $body['prazo_dias'] = $prazoDias;
+        }
+        return $this->request('POST', self::MONITOR . '/chaves', [], $body);
+    }
+
+    /**
+     * Para de monitorar até 1.000 chaves (POST /api/monitor-nfe/chaves/remover).
+     * Sem estorno e sem aviso no webhook.
+     *
+     * @param string[] $chaves
+     */
+    public function removerChavesMonitorNfe(array $chaves): array
+    {
+        $lista = array_map(static fn ($c): string => self::chaveNfe((string) $c), self::lote($chaves));
+        return $this->request('POST', self::MONITOR . '/chaves/remover', [], ['chaves' => $lista]);
+    }
+
+    /**
+     * Para de monitorar uma chave (DELETE /api/monitor-nfe/chaves/{chave}).
+     * Chave fora do monitor: BadRequestException com status 404.
+     */
+    public function removerChaveMonitorNfe(string $chave): void
+    {
+        $this->request('DELETE', self::MONITOR . '/chaves/' . self::chaveNfe($chave));
+    }
+
+    /**
+     * Uma página das chaves monitoradas (GET /api/monitor-nfe/chaves).
+     *
+     * @param string|null                   $status        Só notas nesta situação.
+     * @param bool|null                     $ativo         true: só monitoramentos correndo; false: só os encerrados.
+     * @param string|\DateTimeInterface|null $alteradoDesde Só o que mudou a partir deste instante (o servidor volta
+     *                                                     5 min: deduplique por chave + atualizada_em).
+     * @param string|null                   $cursor        proximo_cursor da página anterior.
+     * @param int|null                      $limite        Itens por página, de 1 a 1.000 (padrão do servidor: 100).
+     */
+    public function listarChavesMonitorNfe(
+        ?string $status = null,
+        ?bool $ativo = null,
+        string|\DateTimeInterface|null $alteradoDesde = null,
+        ?string $cursor = null,
+        ?int $limite = null,
+    ): array {
+        if ($limite !== null && ($limite < 1 || $limite > 1000)) {
+            throw new \InvalidArgumentException('limite deve ser um inteiro de 1 a 1.000.');
+        }
+        $desde = $alteradoDesde instanceof \DateTimeInterface
+            ? $alteradoDesde->format(\DateTimeInterface::ATOM)
+            : (($alteradoDesde ?? '') !== '' ? $alteradoDesde : null);
+        return $this->get(self::MONITOR . '/chaves', [
+            'status' => $status,
+            'ativo' => $ativo,
+            'alterado_desde' => $desde,
+            'cursor' => ($cursor ?? '') !== '' ? $cursor : null,
+            'limite' => $limite !== null ? (string) $limite : null,
+        ]);
+    }
+
+    /**
+     * Percorre todas as páginas da listagem, seguindo proximo_cursor.
+     *
+     *   foreach ($api->iterarChavesMonitorNfe(ativo: true) as $item) { ... }
+     *
+     * @return \Generator<int, array>
+     */
+    public function iterarChavesMonitorNfe(
+        ?string $status = null,
+        ?bool $ativo = null,
+        string|\DateTimeInterface|null $alteradoDesde = null,
+        ?int $limite = null,
+    ): \Generator {
+        $cursor = null;
+        do {
+            $pagina = $this->listarChavesMonitorNfe($status, $ativo, $alteradoDesde, $cursor, $limite);
+            foreach ($pagina['itens'] ?? [] as $item) {
+                yield $item;
+            }
+            $cursor = $pagina['proximo_cursor'] ?? null;
+        } while (\is_string($cursor) && $cursor !== '');
+    }
+
+    /** Situação, eventos e entregas que falharam de uma chave (GET /api/monitor-nfe/chaves/{chave}). */
+    public function consultarChaveMonitorNfe(string $chave): array
+    {
+        return $this->get(self::MONITOR . '/chaves/' . self::chaveNfe($chave), []);
+    }
+
+    /**
+     * Cadastra ou troca a URL do webhook (PUT /api/monitor-nfe/webhook).
+     * Só https na porta 443, com nome público. O "segredo" volta só aqui: guarde-o.
+     * Cadastrar de novo gera outro segredo e reativa o webhook.
+     */
+    public function cadastrarWebhookMonitorNfe(string $url): array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            throw new \InvalidArgumentException('Informe a URL do webhook.');
+        }
+        return $this->request('PUT', self::MONITOR . '/webhook', [], ['url' => $url]);
+    }
+
+    /** URL cadastrada e se os avisos estão saindo (GET /api/monitor-nfe/webhook). */
+    public function consultarWebhookMonitorNfe(): array
+    {
+        return $this->get(self::MONITOR . '/webhook', []);
+    }
+
+    /** Remove o webhook (DELETE /api/monitor-nfe/webhook). O monitoramento continua. */
+    public function removerWebhookMonitorNfe(): void
+    {
+        $this->request('DELETE', self::MONITOR . '/webhook');
+    }
+
+    /**
+     * Gera um segredo novo (POST /api/monitor-nfe/webhook/rotacionar-segredo).
+     * Por 24 h os avisos levam as duas assinaturas (v1=nova,v1=anterior).
+     */
+    public function rotacionarSegredoWebhookMonitorNfe(): array
+    {
+        return $this->request('POST', self::MONITOR . '/webhook/rotacionar-segredo');
+    }
+
+    /** Enfileira um aviso tipo "teste" (POST /api/monitor-nfe/webhook/teste). */
+    public function testarWebhookMonitorNfe(): array
+    {
+        return $this->request('POST', self::MONITOR . '/webhook/teste');
+    }
+
     // ------------------------------------------------------- Imóvel rural
 
     /** Parcelas certificadas no SIGEF/INCRA (GET /api/consultar-sigef). */
@@ -363,6 +528,8 @@ final class FiscalAPI
             ]);
             if ($payload !== null) {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            } elseif ($method === 'POST' || $method === 'PUT') {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, ''); // Content-Length: 0
             }
 
             $raw = curl_exec($ch);
@@ -415,6 +582,31 @@ final class FiscalAPI
             throw new \InvalidArgumentException("Informe apenas um: {$nomes}.");
         }
         return $informados;
+    }
+
+    /**
+     * @param array<int, mixed> $chaves
+     * @return array<int, mixed>
+     */
+    private static function lote(array $chaves): array
+    {
+        if ($chaves === []) {
+            throw new \InvalidArgumentException('Informe ao menos uma chave.');
+        }
+        if (\count($chaves) > self::MONITOR_NFE_MAX_LOTE) {
+            throw new \InvalidArgumentException('Envie no máximo ' . self::MONITOR_NFE_MAX_LOTE . ' chaves por chamada.');
+        }
+        return array_values($chaves);
+    }
+
+    /** Chave de NF-e só com dígitos (tira pontos, espaços e o prefixo "NFe"). */
+    private static function chaveNfe(string $chave): string
+    {
+        $digitos = preg_replace('/\D/', '', $chave) ?? '';
+        if ($digitos === '') {
+            throw new \InvalidArgumentException('Informe a chave de acesso.');
+        }
+        return $digitos;
     }
 
     private static function uf(string $uf): string

@@ -1,6 +1,6 @@
 # FiscalAPI — SDK PHP
 
-Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e e de CT-e por chave, DIFAL de saída por UF, NFS-e por chave, Simples Nacional, SIGEF, CNIR e perfil do produtor rural.
+Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e e de CT-e por chave, Monitor de NF-e por chave com webhook, DIFAL de saída por UF, NFS-e por chave, Simples Nacional, SIGEF, CNIR e perfil do produtor rural.
 
 - PHP 8.1 ou superior, só com a extensão `curl` (nenhum pacote do Composer).
 - Autoload PSR-4 (`FiscalApiBr\`).
@@ -54,6 +54,11 @@ Todos os métodos devolvem `array` com o JSON da API. Use argumentos nomeados pa
 | `consultarNfse($chave, danfse: false)` | `GET /api/consultar-nfse` | NFS-e (padrão nacional) por chave, sem certificado |
 | `consultarNfeXml($chave, $certificado, $senha, manifestar: true)` | `POST /api/consultar-nfe-xml` | XML completo da NF-e |
 | `consultarCteXml($chave, $certificado, $senha)` | `POST /api/consultar-cte-xml` | XML completo do CT-e |
+| `cadastrarChavesMonitorNfe($chaves, $prazoDias = null)` | `POST /api/monitor-nfe/chaves` | Coloca até 1.000 chaves no Monitor de NF-e |
+| `removerChavesMonitorNfe($chaves)` / `removerChaveMonitorNfe($chave)` | `POST /api/monitor-nfe/chaves/remover` / `DELETE /api/monitor-nfe/chaves/{chave}` | Para de monitorar |
+| `listarChavesMonitorNfe($status, $ativo, $alteradoDesde, $cursor, $limite)` / `iterarChavesMonitorNfe(...)` | `GET /api/monitor-nfe/chaves` | Chaves monitoradas (uma página / todas) |
+| `consultarChaveMonitorNfe($chave)` | `GET /api/monitor-nfe/chaves/{chave}` | Situação, eventos e entregas que falharam |
+| `cadastrarWebhookMonitorNfe($url)`, `consultarWebhookMonitorNfe()`, `removerWebhookMonitorNfe()`, `rotacionarSegredoWebhookMonitorNfe()`, `testarWebhookMonitorNfe()` | `/api/monitor-nfe/webhook` | Webhook dos avisos |
 | `consultarDifalSaida($competencia, $certificado, $senha, $ufs = [])` | `POST /api/consultar-difal-saida` | DIFAL de saída por UF de destino (Beta) |
 | `consultarSigef(cpf: \| cnpj:)` | `GET /api/consultar-sigef` | Parcelas certificadas no SIGEF/INCRA |
 | `consultarSigefParcela($uuid, forceFresh: false)` | `GET /api/consultar-sigef-parcela` | Uma parcela com polígono, vértices e confrontantes |
@@ -160,6 +165,59 @@ if ($cte['status'] === 'ok') {
 
 Aceita CT-e (modelo 57), CT-e OS (67) e GTV-e (64). O certificado A1 precisa ser de um participante do documento (emitente, tomador, remetente, destinatário, expedidor ou recebedor) e **não é armazenado** pela API. Só há cobrança quando o XML é devolvido.
 
+### Monitor de NF-e por chave
+
+Cadastre as chaves e a FiscalAPI acompanha cada nota na SEFAZ por até 180 dias. Quando a nota é cancelada, denegada ou recebe um evento (carta de correção, por exemplo), chega um aviso no seu webhook. Sem certificado.
+
+```php
+// 1. Webhook (uma vez). Guarde o segredo: ele só volta aqui.
+$segredo = $api->cadastrarWebhookMonitorNfe('https://seu-sistema.com/fiscalapi/avisos')['segredo'];
+
+// 2. Chaves: até 1.000 por chamada
+$r = $api->cadastrarChavesMonitorNfe(
+    ['35261111222333000181550010000001231123456787'],
+    prazoDias: 180, // opcional, de 1 a 180
+);
+echo $r['aceitas'], ' ', $r['valor_cobrado'], PHP_EOL;
+foreach ($r['resultados'] as $item) {
+    if ($item['situacao'] === 'invalida') {
+        echo $item['chave'], ' ', $item['motivo'], PHP_EOL;
+    }
+}
+
+// 3. Consultar e listar
+$nota = $api->consultarChaveMonitorNfe('35261111222333000181550010000001231123456787');
+foreach ($api->iterarChavesMonitorNfe(alteradoDesde: '2026-11-21T00:00:00-03:00') as $item) {
+    echo $item['chave'], ' ', $item['status'], ' ', $item['entregas_falhas'], PHP_EOL;
+}
+```
+
+Cobra uma vez por chave aceita. Chave já monitorada não é cobrada de novo; chave inválida volta com `motivo` e não é cobrada. Sem saldo para todas, `InsufficientBalanceException` e nenhuma entra.
+
+**Receber o aviso.** Confira a assinatura com o corpo **bruto** (`php://input`, antes do `json_decode`):
+
+```php
+use FiscalApiBr\Webhook;
+
+$corpo = file_get_contents('php://input');
+$ok = Webhook::verificarAssinatura(
+    $corpo,
+    $_SERVER['HTTP_X_FISCALAPI_ASSINATURA'] ?? null,
+    $_SERVER['HTTP_X_FISCALAPI_TIMESTAMP'] ?? null,
+    (string) getenv('FISCALAPI_WEBHOOK_SEGREDO'),
+    tolerancia: 300, // padrão, em segundos
+);
+if (!$ok) {
+    http_response_code(401);
+    exit;
+}
+$aviso = json_decode($corpo, true);
+// deduplique por $aviso['id']: a entrega é "pelo menos uma vez"
+http_response_code(200); // responda 2xx em até 10 s
+```
+
+A assinatura é `v1=` + HMAC-SHA256 do segredo inteiro (`whsec_...`) sobre `"{timestamp}." . corpo`. Depois de `rotacionarSegredoWebhookMonitorNfe()`, o cabeçalho traz `v1=nova,v1=anterior` por 24 h: o helper aceita qualquer uma. Tipos de aviso: `nfe.status_alterado`, `nfe.evento_registrado`, `nfe.monitoramento_encerrado` e `teste`. Detalhes: [documentação](https://docs.fiscalapi.com.br).
+
 ### DIFAL de saída por UF de destino (Beta)
 
 ```php
@@ -239,7 +297,7 @@ $api = new FiscalAPI('sua-chave', timeout: 200, maxRetries: 3);
 ```
 
 - `429`: o SDK espera o tempo do cabeçalho `Retry-After` e tenta de novo.
-- `500`, `502`, `503`, `504` e falhas de rede: novas tentativas com espera exponencial, **só em consultas GET**. A consulta de NF-e (POST) não é repetida automaticamente.
+- `500`, `502`, `503`, `504` e falhas de rede: novas tentativas com espera exponencial, **só em consultas GET**. POST, PUT e DELETE (NF-e, cadastro no monitor, webhook) não são repetidos automaticamente.
 - Algumas consultas (NF-e, SIGEF) podem levar até 3 minutos; o timeout padrão é 200 s. Ajuste também o `max_execution_time` do PHP, se for o caso.
 
 ## Links

@@ -21,7 +21,14 @@ jobs:
           extensions: curl, json
           tools: composer
       - run: composer validate --strict
-      - run: find src examples -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: find src examples tests -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: composer dump-autoload
       - name: Smoke test (autoload sem rede)
         run: php -r "require 'vendor/autoload.php'; new FiscalApiBr\FiscalAPI('x'); echo 'ok', PHP_EOL;"
+      - name: Testes (servidor local, sem rede externa)
+        env:
+          FISCALAPI_ECO_LOG: ${{ runner.temp }}/eco.jsonl
+        run: |
+          php -S 127.0.0.1:8765 tests/servidor-eco.php > /dev/null 2>&1 &
+          for i in $(seq 1 20); do curl -s -o /dev/null http://127.0.0.1:8765/ && break; sleep 0.25; done
+          php tests/MonitorNfeTest.php

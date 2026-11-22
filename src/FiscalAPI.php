@@ -21,7 +21,7 @@ use FiscalApiBr\Exception\ServerException;
  */
 final class FiscalAPI
 {
-    public const VERSION = '0.6.0';
+    public const VERSION = '0.7.0';
     public const DEFAULT_BASE_URL = 'https://api.fiscalapi.com.br';
     /** Algumas consultas (NF-e, SIGEF) podem levar até 180 s no servidor. */
     public const DEFAULT_TIMEOUT = 200;
@@ -31,6 +31,7 @@ final class FiscalAPI
     public const MONITOR_NFE_MAX_LOTE = 1000;
 
     private const MONITOR = '/api/monitor-nfe';
+    private const NFSE = '/api/nfse';
     private const RETRYABLE_ANY_METHOD = [429];
     private const RETRYABLE_IDEMPOTENT = [500, 502, 503, 504];
     private const MAX_BACKOFF = 30.0;
@@ -447,6 +448,260 @@ final class FiscalAPI
         return $this->request('POST', self::MONITOR . '/webhook/teste');
     }
 
+    // -------------------------------------------------- Emissão de NFS-e
+
+    /**
+     * Cadastra a empresa emissora (POST /api/nfse/empresas). Envie antes o
+     * certificado A1 da mesma raiz do CNPJ (enviarCertificadoNfse).
+     *
+     * @param array<string, mixed> $empresa cnpj, razao_social, im, cod_mun_ibge, regime, serie...
+     */
+    public function criarEmpresaNfse(array $empresa): array
+    {
+        if ($empresa === []) {
+            throw new \InvalidArgumentException('Informe os dados da empresa.');
+        }
+        return $this->send('POST', self::NFSE . '/empresas', ['body' => $empresa]);
+    }
+
+    /** Empresas emissoras da conta, ativas e desativadas (GET /api/nfse/empresas). */
+    public function listarEmpresasNfse(): array
+    {
+        return $this->send('GET', self::NFSE . '/empresas');
+    }
+
+    /** Uma empresa emissora (GET /api/nfse/empresas/{empresaId}). */
+    public function obterEmpresaNfse(string $empresaId): array
+    {
+        return $this->send('GET', self::NFSE . '/empresas/' . self::id($empresaId, 'empresaId'));
+    }
+
+    /**
+     * Edita a empresa (PATCH /api/nfse/empresas/{empresaId}): mande só o que muda.
+     * ['ativa' => false] desliga a empresa; ['ativa' => true] religa.
+     *
+     * @param array<string, mixed> $mudancas
+     */
+    public function atualizarEmpresaNfse(string $empresaId, array $mudancas): array
+    {
+        if ($mudancas === []) {
+            throw new \InvalidArgumentException('Informe ao menos um campo em mudancas.');
+        }
+        return $this->send('PATCH', self::NFSE . '/empresas/' . self::id($empresaId, 'empresaId'), ['body' => $mudancas]);
+    }
+
+    /**
+     * Envia ou renova o certificado A1 da empresa (PUT /api/nfse/certificados, multipart).
+     * e-CNPJ ICP-Brasil, .pfx de até 100 KB, da mesma raiz do CNPJ que vai emitir.
+     * Substitui o anterior da mesma raiz. Não é repetido em 5xx.
+     *
+     * @param string      $certificado Caminho do arquivo .pfx/.p12, o conteúdo em base64 ou os bytes do arquivo.
+     * @param string      $senha       Senha do certificado (vazia se o .pfx não tiver).
+     * @param string|null $nomeArquivo Nome do arquivo no envio (padrão: o do caminho, ou certificado.pfx).
+     */
+    public function enviarCertificadoNfse(string $certificado, string $senha = '', ?string $nomeArquivo = null): array
+    {
+        [$bytes, $nome] = self::certificadoBytes($certificado);
+        $arquivo = new \CURLStringFile($bytes, $nomeArquivo ?? $nome, 'application/x-pkcs12');
+        return $this->send('PUT', self::NFSE . '/certificados', [
+            'multipart' => ['certificado' => $arquivo, 'senha' => $senha],
+        ]);
+    }
+
+    /**
+     * Exclui o certificado de uma raiz (DELETE /api/nfse/certificados/{raiz}).
+     * Aceita a raiz (8 caracteres) ou o CNPJ inteiro, com ou sem pontuação.
+     * Antes, desative as empresas da raiz.
+     */
+    public function excluirCertificadoNfse(string $raiz): void
+    {
+        $limpa = strtoupper(preg_replace('/[^0-9A-Za-z]/', '', $raiz) ?? '');
+        if (\strlen($limpa) === 14) {
+            $limpa = substr($limpa, 0, 8);
+        }
+        if (\strlen($limpa) !== 8) {
+            throw new \InvalidArgumentException('Informe a raiz do CNPJ (8 caracteres) ou o CNPJ.');
+        }
+        $this->send('DELETE', self::NFSE . '/certificados/' . $limpa);
+    }
+
+    /**
+     * Pede a emissão de uma NFS-e (POST /api/nfse/notas). A resposta é 202, com a
+     * nota "pendente"; o resultado chega pelo webhook ou por obterNfse(). Em
+     * produção, mande "referencia" (ou $idempotencyKey): o mesmo pedido devolve
+     * a nota que já existe. Com uma delas, o SDK repete a chamada em falha de
+     * rede e 5xx sem risco de nota em dobro.
+     *
+     * @param array<string, mixed> $nota empresa_id, ambiente, referencia, preset, competencia, tomador, servico, valores...
+     */
+    public function emitirNfse(array $nota, ?string $idempotencyKey = null): array
+    {
+        if ($nota === []) {
+            throw new \InvalidArgumentException('Informe os dados da nota.');
+        }
+        $chave = self::chaveIdempotencia($nota['referencia'] ?? null, $idempotencyKey, ($nota['ambiente'] ?? null) === 'producao');
+        return $this->send('POST', self::NFSE . '/notas', [
+            'body' => $nota,
+            'headers' => self::cabecalhoIdempotencia($idempotencyKey),
+            'idempotent' => $chave !== null,
+        ]);
+    }
+
+    /** Uma NFS-e emitida (GET /api/nfse/notas/{notaId}). */
+    public function obterNfse(string $notaId): array
+    {
+        return $this->send('GET', self::NFSE . '/notas/' . self::id($notaId, 'notaId'));
+    }
+
+    /**
+     * Uma página das NFS-e emitidas (GET /api/nfse/notas), em ordem de updated_at.
+     *
+     * @param string|null                    $status          Só notas nesta situação.
+     * @param string|null                    $ambiente        homologacao ou producao.
+     * @param string|null                    $referencia      Busca pela sua referência.
+     * @param string|\DateTimeInterface|null $atualizadaDesde Só notas com updated_at igual ou posterior. A do
+     *                                                        próprio instante volta de novo: trate pelo id.
+     * @param string|null                    $cursor          "proximo" da página anterior.
+     * @param int|null                       $limite          Notas por página, de 1 a 100 (padrão do servidor: 50).
+     */
+    public function listarNfse(
+        ?string $status = null,
+        ?string $ambiente = null,
+        ?string $referencia = null,
+        string|\DateTimeInterface|null $atualizadaDesde = null,
+        ?string $cursor = null,
+        ?int $limite = null,
+    ): array {
+        if ($limite !== null && ($limite < 1 || $limite > 100)) {
+            throw new \InvalidArgumentException('limite deve ser um inteiro de 1 a 100.');
+        }
+        $desde = $atualizadaDesde instanceof \DateTimeInterface
+            ? $atualizadaDesde->format(\DateTimeInterface::ATOM)
+            : (($atualizadaDesde ?? '') !== '' ? $atualizadaDesde : null);
+        return $this->send('GET', self::NFSE . '/notas', ['query' => [
+            'status' => $status,
+            'ambiente' => $ambiente,
+            'referencia' => ($referencia ?? '') !== '' ? $referencia : null,
+            'atualizada_desde' => $desde,
+            'cursor' => ($cursor ?? '') !== '' ? $cursor : null,
+            'limite' => $limite !== null ? (string) $limite : null,
+        ]]);
+    }
+
+    /**
+     * Percorre todas as páginas da listagem, seguindo o cursor "proximo".
+     *
+     *   foreach ($api->iterarNfse(ambiente: 'producao') as $nota) { ... }
+     *
+     * @return \Generator<int, array>
+     */
+    public function iterarNfse(
+        ?string $status = null,
+        ?string $ambiente = null,
+        ?string $referencia = null,
+        string|\DateTimeInterface|null $atualizadaDesde = null,
+        ?int $limite = null,
+    ): \Generator {
+        $cursor = null;
+        do {
+            $pagina = $this->listarNfse($status, $ambiente, $referencia, $atualizadaDesde, $cursor, $limite);
+            foreach ($pagina['itens'] ?? [] as $nota) {
+                yield $nota;
+            }
+            $cursor = $pagina['proximo'] ?? null;
+        } while (\is_string($cursor) && $cursor !== '');
+    }
+
+    /**
+     * Pede o cancelamento de uma NFS-e autorizada (POST /api/nfse/notas/{notaId}/cancelamento).
+     * A resposta traz a nota "cancelando"; o resultado chega pelo webhook
+     * (cancelada ou cancelamento_recusado).
+     *
+     * @param int    $motivo        1 erro na emissão, 2 serviço não prestado, 9 outros.
+     * @param string $justificativa De 15 a 255 caracteres.
+     */
+    public function cancelarNfse(string $notaId, int $motivo, string $justificativa): array
+    {
+        $texto = trim($justificativa);
+        $tamanho = (int) preg_match_all('/./us', $texto);
+        if ($tamanho < 15 || $tamanho > 255) {
+            throw new \InvalidArgumentException('justificativa deve ter de 15 a 255 caracteres.');
+        }
+        return $this->send('POST', self::NFSE . '/notas/' . self::id($notaId, 'notaId') . '/cancelamento', [
+            'body' => ['motivo' => $motivo, 'justificativa' => $texto],
+        ]);
+    }
+
+    /**
+     * Substitui uma NFS-e autorizada por outra (POST /api/nfse/notas/{notaId}/substituicao).
+     * Devolve a nota NOVA, "pendente", com substitui_id. Em produção, mande a
+     * "referencia" da nota nova (ou $idempotencyKey).
+     *
+     * @param array<string, mixed> $substituicao motivo, justificativa, referencia e os dados da nota.
+     */
+    public function substituirNfse(string $notaId, array $substituicao, ?string $idempotencyKey = null): array
+    {
+        if ($substituicao === []) {
+            throw new \InvalidArgumentException('Informe os dados da substituição.');
+        }
+        $chave = self::chaveIdempotencia($substituicao['referencia'] ?? null, $idempotencyKey, false);
+        return $this->send('POST', self::NFSE . '/notas/' . self::id($notaId, 'notaId') . '/substituicao', [
+            'body' => $substituicao,
+            'headers' => self::cabecalhoIdempotencia($idempotencyKey),
+            'idempotent' => $chave !== null,
+        ]);
+    }
+
+    /** XML da NFS-e autorizada (GET /api/nfse/notas/{notaId}/xml). Não cobra. */
+    public function baixarXmlNfse(string $notaId): string
+    {
+        return $this->send('GET', self::NFSE . '/notas/' . self::id($notaId, 'notaId') . '/xml', [
+            'binary' => true,
+            'headers' => ['Accept: application/xml'],
+        ]);
+    }
+
+    /** PDF do DANFSe, em bytes (GET /api/nfse/notas/{notaId}/pdf). Não cobra. */
+    public function baixarPdfNfse(string $notaId): string
+    {
+        return $this->send('GET', self::NFSE . '/notas/' . self::id($notaId, 'notaId') . '/pdf', [
+            'binary' => true,
+            'headers' => ['Accept: application/pdf'],
+        ]);
+    }
+
+    /**
+     * Configura o webhook da emissão (PUT /api/nfse/webhook). Um por conta, para
+     * os dois ambientes. O "segredo" volta só no primeiro cadastro: guarde-o.
+     * Chamar de novo troca a URL e mantém o segredo ("segredo" null).
+     */
+    public function configurarWebhookNfse(string $url): array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            throw new \InvalidArgumentException('Informe a URL do webhook.');
+        }
+        return $this->send('PUT', self::NFSE . '/webhook', ['body' => ['url' => $url]]);
+    }
+
+    /** Webhook da emissão (GET /api/nfse/webhook). Sem webhook: "url" null. */
+    public function obterWebhookNfse(): array
+    {
+        return $this->send('GET', self::NFSE . '/webhook');
+    }
+
+    /** Remove o webhook da emissão (DELETE /api/nfse/webhook). As notas continuam. */
+    public function removerWebhookNfse(): void
+    {
+        $this->send('DELETE', self::NFSE . '/webhook');
+    }
+
+    /** Põe de novo na fila os avisos de uma nota (POST /api/nfse/notas/{notaId}/webhook). */
+    public function reenviarWebhookNfse(string $notaId): array
+    {
+        return $this->send('POST', self::NFSE . '/notas/' . self::id($notaId, 'notaId') . '/webhook');
+    }
+
     // ------------------------------------------------------- Imóvel rural
 
     /** Parcelas certificadas no SIGEF/INCRA (GET /api/consultar-sigef). */
@@ -495,18 +750,49 @@ final class FiscalAPI
      */
     private function request(string $method, string $path, array $query = [], ?array $body = null): array
     {
-        $url = $this->baseUrl . $path . self::encodeQuery($query);
+        return $this->send($method, $path, ['query' => $query, 'body' => $body]);
+    }
+
+    /**
+     * @param array{
+     *     query?: array<string, string|bool|null>,
+     *     body?: array<string, mixed>|null,
+     *     multipart?: array<string, mixed>,
+     *     headers?: list<string>,
+     *     binary?: bool,
+     *     idempotent?: bool
+     * } $opts
+     * @return array|string string quando binary = true
+     */
+    private function send(string $method, string $path, array $opts = []): array|string
+    {
+        $url = $this->baseUrl . $path . self::encodeQuery($opts['query'] ?? []);
         $headers = [
             'X-API-Key: ' . $this->apiKey,
-            'Accept: application/json',
             'User-Agent: ' . $this->userAgent,
         ];
+        $extra = $opts['headers'] ?? [];
+        $temAccept = false;
+        foreach ($extra as $h) {
+            if (stripos($h, 'accept:') === 0) {
+                $temAccept = true;
+            }
+        }
+        if (!$temAccept) {
+            $headers[] = 'Accept: application/json';
+        }
+        $headers = array_merge($headers, $extra);
+        $body = $opts['body'] ?? null;
+        $multipart = $opts['multipart'] ?? null;
         $payload = null;
-        if ($body !== null) {
-            $payload = json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        if ($multipart !== null) {
+            $payload = $multipart; // o curl monta o multipart/form-data com o boundary
+        } elseif ($body !== null) {
+            $payload = json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
             $headers[] = 'Content-Type: application/json';
         }
-        $idempotent = $method === 'GET';
+        $binary = ($opts['binary'] ?? false) === true;
+        $idempotent = $method === 'GET' || ($opts['idempotent'] ?? false) === true;
 
         for ($attempt = 0; ; $attempt++) {
             $responseHeaders = [];
@@ -528,7 +814,7 @@ final class FiscalAPI
             ]);
             if ($payload !== null) {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-            } elseif ($method === 'POST' || $method === 'PUT') {
+            } elseif ($method === 'POST' || $method === 'PUT' || $method === 'PATCH') {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, ''); // Content-Length: 0
             }
 
@@ -547,16 +833,17 @@ final class FiscalAPI
             }
 
             if ($status >= 200 && $status < 300) {
-                return self::decodeSuccess((string) $raw);
+                return $binary ? (string) $raw : self::decodeSuccess((string) $raw);
             }
 
-            $retryable = \in_array($status, self::RETRYABLE_ANY_METHOD, true)
+            $raw = (string) $raw;
+            $retryable = (\in_array($status, self::RETRYABLE_ANY_METHOD, true) && !str_contains($raw, 'NFSE_HOMOLOG_LIMITE'))
                 || ($idempotent && \in_array($status, self::RETRYABLE_IDEMPOTENT, true));
             if ($retryable && $attempt < $this->maxRetries) {
                 self::sleep(self::backoff($attempt, $responseHeaders['retry-after'] ?? null));
                 continue;
             }
-            throw self::errorFromResponse($status, (string) $raw, $responseHeaders);
+            throw self::errorFromResponse($status, $raw, $responseHeaders);
         }
     }
 
@@ -641,6 +928,68 @@ final class FiscalAPI
             return base64_encode($bytes);
         }
         return preg_replace('/\s+/', '', $certificado) ?? $certificado;
+    }
+
+    /** Id (UUID) de empresa ou nota, pronto para o caminho. */
+    private static function id(string $valor, string $nome): string
+    {
+        $v = trim($valor);
+        if ($v === '') {
+            throw new \InvalidArgumentException("Informe {$nome}.");
+        }
+        return rawurlencode($v);
+    }
+
+    /**
+     * Confere "referencia" x Idempotency-Key antes de chamar (a API responderia 422).
+     * Devolve a chave efetiva ou null.
+     */
+    private static function chaveIdempotencia(mixed $referencia, ?string $idempotencyKey, bool $producao): ?string
+    {
+        $ref = \is_string($referencia) ? trim($referencia) : '';
+        $key = trim($idempotencyKey ?? '');
+        if ($ref !== '' && $key !== '' && $ref !== $key) {
+            throw new \InvalidArgumentException('referencia e idempotencyKey diferentes: mande só uma, ou as duas iguais.');
+        }
+        if ($producao && $ref === '' && $key === '') {
+            throw new \InvalidArgumentException('Em produção, informe referencia (ou idempotencyKey) para não emitir a nota em dobro.');
+        }
+        if ($ref !== '') {
+            return $ref;
+        }
+        return $key !== '' ? $key : null;
+    }
+
+    /** @return list<string> */
+    private static function cabecalhoIdempotencia(?string $idempotencyKey): array
+    {
+        $key = trim($idempotencyKey ?? '');
+        return $key !== '' ? ['Idempotency-Key: ' . $key] : [];
+    }
+
+    /**
+     * Bytes do .pfx e o nome do arquivo: caminho, base64 ou os bytes.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private static function certificadoBytes(string $certificado): array
+    {
+        if ($certificado === '') {
+            throw new \InvalidArgumentException('Informe o certificado (.pfx).');
+        }
+        if (\strlen($certificado) < 4096 && !str_contains($certificado, "\0") && @is_file($certificado)) {
+            $bytes = file_get_contents($certificado);
+            if ($bytes === false || $bytes === '') {
+                throw new \RuntimeException("Não foi possível ler o certificado: {$certificado}");
+            }
+            return [$bytes, basename($certificado)];
+        }
+        if (\strlen($certificado) < 4096 && preg_match('/\.(pfx|p12)$/i', $certificado) === 1) {
+            throw new \RuntimeException("Arquivo do certificado não encontrado: {$certificado}");
+        }
+        $limpo = preg_replace('/\s+/', '', $certificado) ?? '';
+        $decodificado = preg_match('/^[A-Za-z0-9+\/]+={0,2}$/', $limpo) === 1 ? base64_decode($limpo, true) : false;
+        return [$decodificado !== false && $decodificado !== '' ? $decodificado : $certificado, 'certificado.pfx'];
     }
 
     private static function backoff(int $attempt, ?string $retryAfter): float

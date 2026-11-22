@@ -32,3 +32,4 @@ jobs:
           php -S 127.0.0.1:8765 tests/servidor-eco.php > /dev/null 2>&1 &
           for i in $(seq 1 20); do curl -s -o /dev/null http://127.0.0.1:8765/ && break; sleep 0.25; done
           php tests/MonitorNfeTest.php
+          php tests/EmissaoNfseTest.php

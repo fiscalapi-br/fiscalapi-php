@@ -1,6 +1,8 @@
-# FiscalAPI — SDK PHP
+# FiscalAPI SDK PHP
 
-Cliente PHP da [FiscalAPI](https://fiscalapi.com.br): Inscrição Estadual nos 27 estados, CNPJ, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e e de CT-e por chave, Monitor de NF-e por chave com webhook, emissão de NFS-e Nacional, DIFAL de saída por UF, NFS-e por chave, Simples Nacional, SIGEF, CNIR e perfil do produtor rural.
+SDK oficial em PHP da [FiscalAPI](https://fiscalapi.com.br) para consultar inscrição estadual (SINTEGRA) nos 27 estados, CNPJ na Receita Federal, Simples Nacional, certidões (CND estadual, CND Federal, CNDT, CRF/FGTS), XML de NF-e e de CT-e pela chave e imóvel rural no CNIR/CAFIR e no SIGEF. O Monitor de NF-e acompanha a nota pela chave, sem certificado, e avisa no seu webhook quando ela é cancelada.
+
+Cobre também NFS-e por chave, DIFAL de saída por UF, emissão de NFS-e Nacional e perfil do produtor rural. Pacote `fiscalapi-br/fiscalapi-php` no Packagist. Documentação: [docs.fiscalapi.com.br](https://docs.fiscalapi.com.br) e [guia PHP](https://docs.fiscalapi.com.br/docs/guias/php).
 
 - PHP 8.1 ou superior, só com a extensão `curl` (nenhum pacote do Composer).
 - Autoload PSR-4 (`FiscalApiBr\`).
@@ -29,7 +31,12 @@ use FiscalApiBr\FiscalAPI;
 
 $api = new FiscalAPI('sua-chave'); // ou defina FISCALAPI_API_KEY
 
-$resp = $api->consultarIe('MT', cpf: '12345678909');
+// CNPJ na Receita Federal
+$empresa = $api->consultarCnpj('68178106000113');
+echo $empresa['result']['razao_social'], ' ', $empresa['result']['situacao_cadastral'], PHP_EOL;
+
+// Inscrição estadual de um produtor rural pelo CPF, em MT (CPF fictício)
+$resp = $api->consultarIe('MT', cpf: '52998224725');
 foreach ($resp['results'] as $ie) {
     echo $ie['inscricao_estadual'], ' ', $ie['situacao_ie'], ' ', $ie['municipio'], PHP_EOL;
 }
